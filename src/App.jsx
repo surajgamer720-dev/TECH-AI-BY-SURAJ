@@ -14,6 +14,8 @@ function App() {
   const [photoData, setPhotoData] = useState(null);
   const [showPhotoOptions, setShowPhotoOptions] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [assistantThinking, setAssistantThinking] = useState(false);
+  const [assistantDraft, setAssistantDraft] = useState(null);
   const [errorMessage, setErrorMessage] = useState(null);
   const messagesEndRef = useRef(null);
   const uploadInputRef = useRef(null);
@@ -40,7 +42,7 @@ function App() {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, assistantDraft, assistantThinking]);
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -52,6 +54,19 @@ function App() {
   const saveSessions = (updatedSessions) => {
     setSessions(updatedSessions);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedSessions));
+  };
+
+  const saveAssistantMessage = (assistantMessage, currentMessages) => {
+    const updatedMessages = [...currentMessages, assistantMessage];
+    setMessages(updatedMessages);
+    if (activeSessionId) {
+      const updatedSessions = sessions.map((session) =>
+        session.id === activeSessionId
+          ? { ...session, messages: updatedMessages }
+          : session
+      );
+      saveSessions(updatedSessions);
+    }
   };
 
   const createSession = () => {
@@ -75,12 +90,30 @@ function App() {
   const openHistory = () => {
     setView('history');
     setErrorMessage(null);
+    setAssistantThinking(false);
   };
 
   const openSession = (sessionId) => {
     setActiveSessionId(sessionId);
     setView('chat');
     setErrorMessage(null);
+    setAssistantThinking(false);
+  };
+
+  const deleteSession = (sessionId) => {
+    const updatedSessions = sessions.filter((session) => session.id !== sessionId);
+    saveSessions(updatedSessions);
+    if (activeSessionId === sessionId) {
+      setActiveSessionId(null);
+      setMessages([]);
+    }
+  };
+
+  const clearHistory = () => {
+    saveSessions([]);
+    setActiveSessionId(null);
+    setMessages([]);
+    setView('home');
   };
 
   const activeSession = sessions.find((session) => session.id === activeSessionId);
@@ -249,6 +282,7 @@ function App() {
   const sendMessage = async () => {
     if (!input.trim() && !photoPreview) return;
     setErrorMessage(null);
+    setAssistantDraft(null);
 
     const text = input.trim() || 'Please describe the attached photo and answer based on it.';
     const userMessage = {
@@ -264,6 +298,7 @@ function App() {
     setPhotoPreview(null);
     setPhotoData(null);
     setIsLoading(true);
+    setAssistantThinking(true);
 
     if (activeSessionId) {
       const updatedSessions = sessions.map((session) =>
@@ -303,26 +338,50 @@ function App() {
 
       const data = await response.json();
       const rawContent = data.choices?.[0]?.message?.content;
-      const assistantText = createAssistantText(rawContent);
+      const assistantText = createAssistantText(rawContent).trim() || 'No response content.';
 
-      const assistantMessage = {
-        id: `${Date.now()}-assistant`,
+      setAssistantThinking(false);
+      const draftId = `${Date.now()}-assistant-draft`;
+      const words = assistantText.split(' ');
+      let revealIndex = 0;
+
+      setAssistantDraft({
+        id: draftId,
         role: 'assistant',
-        content: assistantText,
-      };
+        content: '',
+        fullContent: assistantText,
+        isDraft: true,
+      });
 
-      const updatedMessages = [...currentMessages, assistantMessage];
-      setMessages(updatedMessages);
-      if (activeSessionId) {
-        const updatedSessions = sessions.map((session) =>
-          session.id === activeSessionId
-            ? { ...session, messages: updatedMessages }
-            : session
-        );
-        saveSessions(updatedSessions);
-      }
+      const reveal = setInterval(() => {
+        revealIndex += 1;
+        setAssistantDraft((prev) => {
+          if (!prev) {
+            clearInterval(reveal);
+            return null;
+          }
+
+          const nextContent = words.slice(0, revealIndex).join(' ');
+          const nextDraft = { ...prev, content: nextContent };
+
+          if (revealIndex >= words.length) {
+            clearInterval(reveal);
+            const assistantMessage = {
+              id: `${Date.now()}-assistant`,
+              role: 'assistant',
+              content: assistantText,
+            };
+            setAssistantDraft(null);
+            saveAssistantMessage(assistantMessage, currentMessages);
+          }
+
+          return nextDraft;
+        });
+      }, 30);
     } catch (error) {
       console.error('Send message failed:', error);
+      setAssistantThinking(false);
+      setAssistantDraft(null);
       setErrorMessage(error.message || 'Something went wrong.');
       setMessages((prev) => [
         ...prev,
@@ -369,9 +428,16 @@ function App() {
               <p className="chat-title">History</p>
               <span className="chat-subtitle">Your past chats are saved by date and time.</span>
             </div>
-            <button className="back-button" onClick={() => setView('home')}>
-              Home
-            </button>
+            <div className="history-actions">
+              {sessions.length > 0 && (
+                <button className="delete-history-button" onClick={clearHistory}>
+                  Clear all
+                </button>
+              )}
+              <button className="back-button" onClick={() => setView('home')}>
+                Home
+              </button>
+            </div>
           </div>
 
           <div className="history-list">
@@ -379,13 +445,18 @@ function App() {
               <div className="empty-state">No history yet. Start a chat to save your first session.</div>
             ) : (
               sessions.map((session) => (
-                <button key={session.id} className="history-item" onClick={() => openSession(session.id)}>
-                  <div>
-                    <div className="history-title">{session.title}</div>
-                    <div className="history-meta">{formatDate(session.createdAt)}</div>
-                  </div>
-                  <div className="history-count">{session.messages.length} messages</div>
-                </button>
+                <div key={session.id} className="history-item-row">
+                  <button className="history-item" onClick={() => openSession(session.id)}>
+                    <div>
+                      <div className="history-title">{session.title}</div>
+                      <div className="history-meta">{formatDate(session.createdAt)}</div>
+                    </div>
+                    <div className="history-count">{session.messages.length} messages</div>
+                  </button>
+                  <button className="delete-session-button" onClick={() => deleteSession(session.id)}>
+                    Delete
+                  </button>
+                </div>
               ))
             )}
           </div>
@@ -393,30 +464,51 @@ function App() {
       ) : (
         <div className="chat-card">
           <div className="chat-header">
-            <div>
-              <p className="chat-title">{activeSession?.title || 'Simple chat'}</p>
-              <span className="chat-subtitle">{activeSession ? formatDate(activeSession.createdAt) : 'Fast responses, low credit usage.'}</span>
+            <div className="chat-header-top">
+              <div className="chat-icons">
+                <button className="icon-pill" aria-label="Chats">💬</button>
+                <button className="icon-pill" aria-label="Voice">🎙️</button>
+                <button className="icon-pill" aria-label="Media">📎</button>
+              </div>
+              <button className="history-button chat-history-btn" onClick={openHistory}>
+                History
+              </button>
             </div>
-            <button className="back-button" onClick={() => setView('home')}>
-              Home
-            </button>
+            <div className="chat-title-row">
+              <p className="chat-title">{activeSession?.title || 'Simple chat'}</p>
+              <span className="chat-subtitle">{activeSession ? formatDate(activeSession.createdAt) : 'Fast responses, long conversations, rich media support.'}</span>
+            </div>
           </div>
 
           <div className="messages-panel">
-            {messages.length === 0 ? (
+            {(messages.length === 0 && !assistantDraft && !assistantThinking) ? (
               <div className="empty-state">Say hi and start a quick conversation.</div>
             ) : (
-              messages.map((message) => (
+              [...messages, ...(assistantDraft ? [assistantDraft] : [])].map((message) => (
                 <div key={message.id} className={`message-row ${message.role}`}>
-                  <div className="message-bubble">
+                  <div className={`message-bubble ${message.role === 'assistant' ? 'assistant-bubble' : 'user-bubble'}`}>
+                    {message.role === 'assistant' && <div className="assistant-badge">typescript</div>}
                     <div className="message-role">{message.role === 'user' ? 'You' : 'AI'}</div>
-                    <div className="message-content">
+                    <div className={`message-content ${message.isDraft ? 'draft-content' : ''}`}>
                       {renderMessageContent(message.content)}
+                      {message.isDraft && message.content && <span className="typing-caret">▍</span>}
                     </div>
-                    {message.photoPreview && <img className="message-image" src={message.photoPreview} alt="Attached" />}
+                    {message.photoPreview && <img className="message-image" src={message.photoPreview} alt="Attached content" />}
                   </div>
                 </div>
               ))
+            )}
+            {assistantThinking && (
+              <div className="message-row assistant typing-row">
+                <div className="message-bubble assistant-bubble typing-bubble">
+                  <div className="assistant-badge">typing</div>
+                  <div className="typing-dots">
+                    <span />
+                    <span />
+                    <span />
+                  </div>
+                </div>
+              </div>
             )}
             <div ref={messagesEndRef} />
           </div>
@@ -424,50 +516,47 @@ function App() {
           {errorMessage && <div className="error-banner">{errorMessage}</div>}
 
           <div className="composer">
-            <div className="composer-top">
-              <button
-                className={`plus-button ${showPhotoOptions ? 'active' : ''}`}
-                onClick={() => setShowPhotoOptions((prev) => !prev)}
+            <button
+              className={`plus-button ${showPhotoOptions ? 'active' : ''}`}
+              onClick={() => setShowPhotoOptions((prev) => !prev)}
+              disabled={isLoading}
+              aria-label="Add media"
+            >
+              +
+            </button>
+            <div className="composer-input-wrap">
+              <input
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                placeholder="Ask me anything"
                 disabled={isLoading}
-              >
-                +
+              />
+              <button className="send-button" onClick={sendMessage} disabled={isLoading || (!input.trim() && !photoPreview)}>
+                {isLoading ? 'Sending…' : 'Send'}
               </button>
-              {showPhotoOptions && (
-                <div className="photo-menu">
-                  <button className="photo-menu-item" onClick={() => { openCamera(); setShowPhotoOptions(false); }} disabled={isLoading}>
-                    Take photo
-                  </button>
-                  <button className="photo-menu-item" onClick={() => { openUpload(); setShowPhotoOptions(false); }} disabled={isLoading}>
-                    Upload photo
-                  </button>
-                </div>
-              )}
             </div>
-
-            <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" onChange={handleFileChange} hidden />
-            <input ref={uploadInputRef} type="file" accept="image/*" onChange={handleFileChange} hidden />
-
-            {photoPreview && (
-              <div className="photo-preview">
-                <img src={photoPreview} alt="Selected" />
-                <button className="clear-photo" onClick={() => { setPhotoPreview(null); setPhotoData(null); }}>
-                  Remove photo
+            {showPhotoOptions && (
+              <div className="photo-menu">
+                <button className="photo-menu-item" onClick={() => { openCamera(); setShowPhotoOptions(false); }} disabled={isLoading}>
+                  Take photo
+                </button>
+                <button className="photo-menu-item" onClick={() => { openUpload(); setShowPhotoOptions(false); }} disabled={isLoading}>
+                  Upload photo
                 </button>
               </div>
             )}
-
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              placeholder="Type your question..."
-              rows={2}
-              disabled={isLoading}
-            />
-            <button className="send-button" onClick={sendMessage} disabled={isLoading || (!input.trim() && !photoPreview)}>
-              {isLoading ? 'Sending…' : 'Send'}
-            </button>
+            <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" onChange={handleFileChange} hidden />
+            <input ref={uploadInputRef} type="file" accept="image/*" onChange={handleFileChange} hidden />
           </div>
+          {photoPreview && (
+            <div className="photo-preview">
+              <img src={photoPreview} alt="Selected" />
+              <button className="clear-photo" onClick={() => { setPhotoPreview(null); setPhotoData(null); }}>
+                Remove
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>
