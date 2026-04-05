@@ -1,0 +1,477 @@
+import { useState, useRef, useEffect } from 'react';
+import './App.css';
+
+const DEFAULT_MODEL = 'google/gemini-2.5-flash-lite';
+const STORAGE_KEY = 'openrouterChatSessions';
+
+function App() {
+  const [view, setView] = useState('home');
+  const [sessions, setSessions] = useState([]);
+  const [activeSessionId, setActiveSessionId] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [photoPreview, setPhotoPreview] = useState(null);
+  const [photoData, setPhotoData] = useState(null);
+  const [showPhotoOptions, setShowPhotoOptions] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState(null);
+  const messagesEndRef = useRef(null);
+  const uploadInputRef = useRef(null);
+  const cameraInputRef = useRef(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      try {
+        const storedSessions = JSON.parse(saved);
+        if (Array.isArray(storedSessions)) {
+          setSessions(storedSessions);
+        }
+      } catch (error) {
+        console.error('Load sessions failed:', error);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    const activeSession = sessions.find((session) => session.id === activeSessionId);
+    setMessages(activeSession?.messages || []);
+  }, [activeSessionId, sessions]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good morning';
+    if (hour < 18) return 'Good afternoon';
+    return 'Good evening';
+  };
+
+  const saveSessions = (updatedSessions) => {
+    setSessions(updatedSessions);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedSessions));
+  };
+
+  const createSession = () => {
+    const id = crypto.randomUUID ? crypto.randomUUID() : `session-${Date.now()}`;
+    const nextSession = {
+      id,
+      title: `Chat ${new Date().toLocaleString()}`,
+      createdAt: Date.now(),
+      messages: [],
+    };
+
+    const updatedSessions = [nextSession, ...sessions];
+    saveSessions(updatedSessions);
+    setActiveSessionId(id);
+    setInput('');
+    setPhotoPreview(null);
+    setPhotoData(null);
+    setView('chat');
+  };
+
+  const openHistory = () => {
+    setView('history');
+    setErrorMessage(null);
+  };
+
+  const openSession = (sessionId) => {
+    setActiveSessionId(sessionId);
+    setView('chat');
+    setErrorMessage(null);
+  };
+
+  const activeSession = sessions.find((session) => session.id === activeSessionId);
+
+  const formatDate = (timestamp) => new Date(timestamp).toLocaleString();
+
+  const createPayload = (text, photoPreview) => {
+    const userContent = [{ type: 'text', text }];
+
+    if (photoPreview) {
+      userContent.push({ type: 'image_url', image_url: photoPreview });
+    }
+
+    return [
+      {
+        role: 'user',
+        content: userContent,
+      },
+    ];
+  };
+
+  const createAssistantText = (content) => {
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      return content.map((item) => item?.text || '').join(' ').trim();
+    }
+    if (content?.text) {
+      return content.text;
+    }
+    return 'No response content.';
+  };
+
+  const copyToClipboard = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (error) {
+      console.error('Copy failed', error);
+    }
+  };
+
+  const renderInlineText = (text) => {
+    const parts = text.split(/(`[^`]+`)/g);
+    return parts.map((part, index) => {
+      if (/^`[^`]+`$/.test(part)) {
+        return (
+          <code key={index} className="inline-code">
+            {part.slice(1, -1)}
+          </code>
+        );
+      }
+      return <span key={index}>{part}</span>;
+    });
+  };
+
+  const isTableSeparator = (line) => /^\s*\|?\s*[:-]+\s*(\|\s*[:-]+\s*)+\|?\s*$/.test(line);
+
+  const renderMessageContent = (content) => {
+    if (!content) return null;
+    const lines = content.split('\n');
+    const nodes = [];
+    let index = 0;
+
+    while (index < lines.length) {
+      const line = lines[index];
+
+      if (line.startsWith('```')) {
+        const codeLines = [];
+        index += 1;
+        while (index < lines.length && !lines[index].startsWith('```')) {
+          codeLines.push(lines[index]);
+          index += 1;
+        }
+        index += 1;
+        const codeText = codeLines.join('\n');
+        nodes.push(
+          <div key={`code-${index}`} className="code-block-wrapper">
+            <button className="copy-button" onClick={() => copyToClipboard(codeText)}>
+              Copy
+            </button>
+            <pre className="code-block">
+              <code>{codeText}</code>
+            </pre>
+          </div>
+        );
+        continue;
+      }
+
+      if (line.startsWith('> ')) {
+        const quoteLines = [];
+        while (index < lines.length && lines[index].startsWith('> ')) {
+          quoteLines.push(lines[index].slice(2));
+          index += 1;
+        }
+        nodes.push(
+          <blockquote key={`quote-${index}`}>
+            {renderInlineText(quoteLines.join(' '))}
+          </blockquote>
+        );
+        continue;
+      }
+
+      if (line.includes('|') && isTableSeparator(lines[index + 1] || '')) {
+        const headerCells = line.split('|').map((cell) => cell.trim()).filter((cell) => cell.length > 0);
+        index += 2;
+        const rows = [];
+        while (index < lines.length && lines[index].includes('|')) {
+          const rowCells = lines[index].split('|').map((cell) => cell.trim()).filter((cell) => cell.length > 0);
+          rows.push(rowCells);
+          index += 1;
+        }
+        nodes.push(
+          <div key={`table-${index}`} className="markdown-table-wrapper">
+            <table>
+              <thead>
+                <tr>{headerCells.map((header, colIndex) => <th key={colIndex}>{header}</th>)}</tr>
+              </thead>
+              <tbody>
+                {rows.map((row, rowIndex) => (
+                  <tr key={rowIndex}>
+                    {row.map((cell, cellIndex) => <td key={cellIndex}>{cell}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        );
+        continue;
+      }
+
+      if (line.trim() === '') {
+        nodes.push(<div key={`spacer-${index}`} className="message-spacer" />);
+        index += 1;
+        continue;
+      }
+
+      nodes.push(
+        <p key={`text-${index}`}>
+          {renderInlineText(line)}
+        </p>
+      );
+      index += 1;
+    }
+
+    return nodes;
+  };
+
+  const handleFileChange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result === 'string') {
+        setPhotoPreview(result);
+        setPhotoData(result.split(',')[1] ?? null);
+      }
+    };
+    reader.readAsDataURL(file);
+    event.target.value = '';
+  };
+
+  const openUpload = () => uploadInputRef.current?.click();
+  const openCamera = () => cameraInputRef.current?.click();
+
+  const sendMessage = async () => {
+    if (!input.trim() && !photoPreview) return;
+    setErrorMessage(null);
+
+    const text = input.trim() || 'Please describe the attached photo and answer based on it.';
+    const userMessage = {
+      id: Date.now().toString(),
+      role: 'user',
+      content: text,
+      photoPreview,
+    };
+
+    const currentMessages = [...messages, userMessage];
+    setMessages(currentMessages);
+    setInput('');
+    setPhotoPreview(null);
+    setPhotoData(null);
+    setIsLoading(true);
+
+    if (activeSessionId) {
+      const updatedSessions = sessions.map((session) =>
+        session.id === activeSessionId
+          ? { ...session, messages: currentMessages }
+          : session
+      );
+      saveSessions(updatedSessions);
+    }
+
+    try {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${import.meta.env.VITE_OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+          'X-OpenRouter-Title': 'Minimal AI Chat',
+        },
+        body: JSON.stringify({
+          model: DEFAULT_MODEL,
+          messages: createPayload(userMessage.content, userMessage.photoPreview),
+          temperature: 0.2,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        let message = 'Unable to reach OpenRouter. Please try again.';
+        try {
+          const parsed = JSON.parse(errorBody);
+          message = parsed.error?.message || parsed.message || message;
+        } catch {
+          message = errorBody || message;
+        }
+        throw new Error(message);
+      }
+
+      const data = await response.json();
+      const rawContent = data.choices?.[0]?.message?.content;
+      const assistantText = createAssistantText(rawContent);
+
+      const assistantMessage = {
+        id: `${Date.now()}-assistant`,
+        role: 'assistant',
+        content: assistantText,
+      };
+
+      const updatedMessages = [...currentMessages, assistantMessage];
+      setMessages(updatedMessages);
+      if (activeSessionId) {
+        const updatedSessions = sessions.map((session) =>
+          session.id === activeSessionId
+            ? { ...session, messages: updatedMessages }
+            : session
+        );
+        saveSessions(updatedSessions);
+      }
+    } catch (error) {
+      console.error('Send message failed:', error);
+      setErrorMessage(error.message || 'Something went wrong.');
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `${Date.now()}-error`,
+          role: 'assistant',
+          content: error.message || 'Something went wrong. Please try again.',
+        },
+      ]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleKeyDown = (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      sendMessage();
+    }
+  };
+
+  return (
+    <div className="app-shell">
+      {view === 'home' ? (
+        <div className="home-card">
+          <div className="hero-copy">
+            <p className="greeting">{getGreeting()}</p>
+            <h1>TECH AI</h1>
+            <p className="subtext">Powered by Suraj Creation — for personal use only. All legal rights reserved.</p>
+          </div>
+          <div className="home-actions">
+            <button className="start-button" onClick={createSession}>
+              Start
+            </button>
+            <button className="history-button" onClick={openHistory}>
+              History
+            </button>
+          </div>
+        </div>
+      ) : view === 'history' ? (
+        <div className="history-card">
+          <div className="history-header">
+            <div>
+              <p className="chat-title">History</p>
+              <span className="chat-subtitle">Your past chats are saved by date and time.</span>
+            </div>
+            <button className="back-button" onClick={() => setView('home')}>
+              Home
+            </button>
+          </div>
+
+          <div className="history-list">
+            {sessions.length === 0 ? (
+              <div className="empty-state">No history yet. Start a chat to save your first session.</div>
+            ) : (
+              sessions.map((session) => (
+                <button key={session.id} className="history-item" onClick={() => openSession(session.id)}>
+                  <div>
+                    <div className="history-title">{session.title}</div>
+                    <div className="history-meta">{formatDate(session.createdAt)}</div>
+                  </div>
+                  <div className="history-count">{session.messages.length} messages</div>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="chat-card">
+          <div className="chat-header">
+            <div>
+              <p className="chat-title">{activeSession?.title || 'Simple chat'}</p>
+              <span className="chat-subtitle">{activeSession ? formatDate(activeSession.createdAt) : 'Fast responses, low credit usage.'}</span>
+            </div>
+            <button className="back-button" onClick={() => setView('home')}>
+              Home
+            </button>
+          </div>
+
+          <div className="messages-panel">
+            {messages.length === 0 ? (
+              <div className="empty-state">Say hi and start a quick conversation.</div>
+            ) : (
+              messages.map((message) => (
+                <div key={message.id} className={`message-row ${message.role}`}>
+                  <div className="message-bubble">
+                    <div className="message-role">{message.role === 'user' ? 'You' : 'AI'}</div>
+                    <div className="message-content">
+                      {renderMessageContent(message.content)}
+                    </div>
+                    {message.photoPreview && <img className="message-image" src={message.photoPreview} alt="Attached" />}
+                  </div>
+                </div>
+              ))
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {errorMessage && <div className="error-banner">{errorMessage}</div>}
+
+          <div className="composer">
+            <div className="composer-top">
+              <button
+                className={`plus-button ${showPhotoOptions ? 'active' : ''}`}
+                onClick={() => setShowPhotoOptions((prev) => !prev)}
+                disabled={isLoading}
+              >
+                +
+              </button>
+              {showPhotoOptions && (
+                <div className="photo-menu">
+                  <button className="photo-menu-item" onClick={() => { openCamera(); setShowPhotoOptions(false); }} disabled={isLoading}>
+                    Take photo
+                  </button>
+                  <button className="photo-menu-item" onClick={() => { openUpload(); setShowPhotoOptions(false); }} disabled={isLoading}>
+                    Upload photo
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <input ref={cameraInputRef} type="file" accept="image/*" capture="environment" onChange={handleFileChange} hidden />
+            <input ref={uploadInputRef} type="file" accept="image/*" onChange={handleFileChange} hidden />
+
+            {photoPreview && (
+              <div className="photo-preview">
+                <img src={photoPreview} alt="Selected" />
+                <button className="clear-photo" onClick={() => { setPhotoPreview(null); setPhotoData(null); }}>
+                  Remove photo
+                </button>
+              </div>
+            )}
+
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Type your question..."
+              rows={2}
+              disabled={isLoading}
+            />
+            <button className="send-button" onClick={sendMessage} disabled={isLoading || (!input.trim() && !photoPreview)}>
+              {isLoading ? 'Sending…' : 'Send'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default App;

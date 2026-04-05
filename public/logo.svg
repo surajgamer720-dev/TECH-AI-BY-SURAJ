@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240">
+  <rect width="240" height="240" rx="40" fill="#07101c" />
+  <g transform="translate(30 30)">
+    <path d="M30 0 L120 60 L30 120 Z" fill="#ff564f" />
+    <path d="M120 0 L210 60 L120 120 Z" fill="#f9a327" />
+    <path d="M30 120 L120 180 L30 240 Z" fill="#2f90f4" />
+    <path d="M120 120 L210 180 L120 240 Z" fill="#eb2a5a" />
+    <circle cx="120" cy="120" r="40" fill="#4bd3ff" opacity="0.15" />
+  </g>
+</svg>
