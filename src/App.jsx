@@ -16,6 +16,7 @@ function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [assistantThinking, setAssistantThinking] = useState(false);
   const [assistantDraft, setAssistantDraft] = useState(null);
+  const [updateAvailable, setUpdateAvailable] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
   const messagesEndRef = useRef(null);
   const uploadInputRef = useRef(null);
@@ -44,6 +45,62 @@ function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, assistantDraft, assistantThinking]);
 
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+
+    let refreshing = false;
+
+    const configureUpdate = async () => {
+      try {
+        const reg = await navigator.serviceWorker.getRegistration('/sw.js');
+        if (!reg) return;
+
+        if (reg.waiting) {
+          setUpdateAvailable(true);
+        }
+
+        reg.addEventListener('updatefound', () => {
+          const newWorker = reg.installing;
+          if (!newWorker) return;
+          newWorker.addEventListener('statechange', () => {
+            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+              setUpdateAvailable(true);
+            }
+          });
+        });
+      } catch (error) {
+        console.error('Service worker update check failed:', error);
+      }
+    };
+
+    const handleControllerChange = () => {
+      if (refreshing) return;
+      refreshing = true;
+      window.location.reload();
+    };
+
+    const handleWindowError = (event) => {
+      console.error('Unhandled error:', event.error || event.message);
+      setErrorMessage('Unexpected error occurred. Please refresh.');
+    };
+
+    const handleUnhandledRejection = (event) => {
+      console.error('Unhandled promise rejection:', event.reason);
+      setErrorMessage('Network or app error occurred. Try again later.');
+    };
+
+    configureUpdate();
+    navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange);
+    window.addEventListener('error', handleWindowError);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+
+    return () => {
+      navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange);
+      window.removeEventListener('error', handleWindowError);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
+  }, []);
+
   const getGreeting = () => {
     const hour = new Date().getHours();
     if (hour < 12) return 'Good morning';
@@ -66,6 +123,14 @@ function App() {
           : session
       );
       saveSessions(updatedSessions);
+    }
+  };
+
+  const activateUpdate = async () => {
+    if (!('serviceWorker' in navigator)) return;
+    const registration = await navigator.serviceWorker.getRegistration('/sw.js');
+    if (registration?.waiting) {
+      registration.waiting.postMessage({ type: 'SKIP_WAITING' });
     }
   };
 
@@ -463,6 +528,14 @@ function App() {
         </div>
       ) : (
         <div className="chat-card">
+          {updateAvailable && (
+            <div className="update-banner">
+              New version available. Refresh to install the latest app.
+              <button className="update-button" onClick={activateUpdate}>
+                Update
+              </button>
+            </div>
+          )}
           <div className="chat-header">
             <div className="chat-header-top">
               <div className="chat-icons">
