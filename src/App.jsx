@@ -329,13 +329,47 @@ function App() {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    // Validate file size (5MB limit)
+    if (file.size > 5 * 1024 * 1024) {
+      setErrorMessage('Image too large. Please use an image under 5MB.');
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result;
       if (typeof result === 'string') {
-        setPhotoPreview(result);
-        setPhotoData(result.split(',')[1] ?? null);
+        // Compress image if too large
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          const maxSize = 1200;
+          if (width > height && width > maxSize) {
+            height = (height * maxSize) / width;
+            width = maxSize;
+          } else if (height > maxSize) {
+            width = (width * maxSize) / height;
+            height = maxSize;
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressed = canvas.toDataURL('image/jpeg', 0.8);
+          if (compressed.length > 3 * 1024 * 1024) {
+            setErrorMessage('Could not compress image. Try a smaller file.');
+            return;
+          }
+          setPhotoPreview(compressed);
+          setPhotoData(compressed.split(',')[1] ?? null);
+        };
+        img.src = result;
       }
+    };
+    reader.onerror = () => {
+      setErrorMessage('Failed to read image file.');
     };
     reader.readAsDataURL(file);
     event.target.value = '';
@@ -374,80 +408,105 @@ function App() {
       saveSessions(updatedSessions);
     }
 
-    try {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${import.meta.env.VITE_OPENROUTER_API_KEY}`,
-          'Content-Type': 'application/json',
-          'X-OpenRouter-Title': 'Minimal AI Chat',
-        },
-        body: JSON.stringify({
-          model: DEFAULT_MODEL,
-          messages: createPayload(userMessage.content, userMessage.photoPreview),
-          temperature: 0.2,
-        }),
-      });
+    const sendWithRetry = async (retries = 2) => {
+      try {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 45000); // 45 sec timeout
 
-      if (!response.ok) {
-        const errorBody = await response.text();
-        let message = 'Unable to reach OpenRouter. Please try again.';
-        try {
-          const parsed = JSON.parse(errorBody);
-          message = parsed.error?.message || parsed.message || message;
-        } catch {
-          message = errorBody || message;
-        }
-        throw new Error(message);
-      }
-
-      const data = await response.json();
-      const rawContent = data.choices?.[0]?.message?.content;
-      const assistantText = createAssistantText(rawContent).trim() || 'No response content.';
-
-      setAssistantThinking(false);
-      const draftId = `${Date.now()}-assistant-draft`;
-      const words = assistantText.split(' ');
-      let revealIndex = 0;
-
-      setAssistantDraft({
-        id: draftId,
-        role: 'assistant',
-        content: '',
-        fullContent: assistantText,
-        isDraft: true,
-      });
-
-      const reveal = setInterval(() => {
-        revealIndex += 1;
-        setAssistantDraft((prev) => {
-          if (!prev) {
-            clearInterval(reveal);
-            return null;
-          }
-
-          const nextContent = words.slice(0, revealIndex).join(' ');
-          const nextDraft = { ...prev, content: nextContent };
-
-          if (revealIndex >= words.length) {
-            clearInterval(reveal);
-            const assistantMessage = {
-              id: `${Date.now()}-assistant`,
-              role: 'assistant',
-              content: assistantText,
-            };
-            setAssistantDraft(null);
-            saveAssistantMessage(assistantMessage, currentMessages);
-          }
-
-          return nextDraft;
+        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${import.meta.env.VITE_OPENROUTER_API_KEY}`,
+            'Content-Type': 'application/json',
+            'X-OpenRouter-Title': 'Minimal AI Chat',
+          },
+          body: JSON.stringify({
+            model: DEFAULT_MODEL,
+            messages: createPayload(userMessage.content, userMessage.photoPreview),
+            temperature: 0.2,
+          }),
+          signal: controller.signal,
         });
-      }, 30);
+
+        clearTimeout(timeout);
+
+        if (!response.ok) {
+          const errorBody = await response.text();
+          let message = 'Unable to reach OpenRouter. Please try again.';
+          try {
+            const parsed = JSON.parse(errorBody);
+            message = parsed.error?.message || parsed.message || message;
+          } catch {
+            message = errorBody || message;
+          }
+          throw new Error(message);
+        }
+
+        const data = await response.json();
+        const rawContent = data.choices?.[0]?.message?.content;
+        const assistantText = createAssistantText(rawContent).trim() || 'No response content.';
+
+        setAssistantThinking(false);
+        const draftId = `${Date.now()}-assistant-draft`;
+        const words = assistantText.split(' ');
+        let revealIndex = 0;
+
+        setAssistantDraft({
+          id: draftId,
+          role: 'assistant',
+          content: '',
+          fullContent: assistantText,
+          isDraft: true,
+        });
+
+        const reveal = setInterval(() => {
+          revealIndex += 1;
+          setAssistantDraft((prev) => {
+            if (!prev) {
+              clearInterval(reveal);
+              return null;
+            }
+
+            const nextContent = words.slice(0, revealIndex).join(' ');
+            const nextDraft = { ...prev, content: nextContent };
+
+            if (revealIndex >= words.length) {
+              clearInterval(reveal);
+              const assistantMessage = {
+                id: `${Date.now()}-assistant`,
+                role: 'assistant',
+                content: assistantText,
+              };
+              setAssistantDraft(null);
+              saveAssistantMessage(assistantMessage, currentMessages);
+            }
+
+            return nextDraft;
+          });
+        }, 30);
+      } catch (error) {
+        if (error.name === 'AbortError') {
+          if (retries > 0) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            return sendWithRetry(retries - 1);
+          }
+          throw new Error('Request timed out. Please check your connection and try again.');
+        }
+        throw error;
+      }
+    };
+
+    try {
+      await sendWithRetry();
     } catch (error) {
       console.error('Send message failed:', error);
       setAssistantThinking(false);
       setAssistantDraft(null);
-      setErrorMessage(error.message || 'Something went wrong.');
+      setErrorMessage(
+        error.message?.includes('network') || error.message?.includes('timeout')
+          ? 'Network error. Check your connection and try again.'
+          : error.message || 'Something went wrong. Please try again.'
+      );
       setMessages((prev) => [
         ...prev,
         {
