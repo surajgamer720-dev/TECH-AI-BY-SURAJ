@@ -649,32 +649,44 @@ function App() {
 
           <div className="composer">
             <button
-              className={`plus-button ${showPhotoOptions ? 'active' : ''}`}
+              className={`attach-button ${showPhotoOptions ? 'active' : ''}`}
               onClick={() => setShowPhotoOptions((prev) => !prev)}
               disabled={isLoading}
               aria-label="Add media"
             >
-              +
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48" />
+              </svg>
             </button>
             <div className="composer-input-wrap">
               <input
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask me anything"
+                placeholder="Ask me anything..."
                 disabled={isLoading}
               />
               <button className="send-button" onClick={sendMessage} disabled={isLoading || (!input.trim() && !photoPreview)}>
-                {isLoading ? 'Sending…' : 'Send'}
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="22" y1="2" x2="11" y2="13" />
+                  <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
               </button>
             </div>
             {showPhotoOptions && (
               <div className="photo-menu">
-                <button className="photo-menu-item" onClick={() => { openCamera(); setShowPhotoOptions(false); }} disabled={isLoading}>
-                  Take photo
+                <button className="photo-menu-item icon-only" onClick={() => { openCamera(); setShowPhotoOptions(false); }} disabled={isLoading} title="Take Photo">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z" />
+                    <circle cx="12" cy="13" r="4" />
+                  </svg>
                 </button>
-                <button className="photo-menu-item" onClick={() => { openUpload(); setShowPhotoOptions(false); }} disabled={isLoading}>
-                  Upload photo
+                <button className="photo-menu-item icon-only" onClick={() => { openUpload(); setShowPhotoOptions(false); }} disabled={isLoading} title="Upload Image">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
+                    <polyline points="17 8 12 3 7 8" />
+                    <line x1="12" y1="3" x2="12" y2="15" />
+                  </svg>
                 </button>
               </div>
             )}
